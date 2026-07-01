@@ -1,0 +1,2 @@
+Put your self-hosted RustDesk server's PUBLIC key (id_ed25519.pub, base64) here.
+This is non-secret; clients need it to connect. The private key stays on the server.

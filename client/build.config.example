@@ -1,0 +1,20 @@
+# Copy this file to build.config (git-ignored) and fill in YOUR self-hosted values.
+# build-client.ps1 bakes these into the distributed support-client.exe.
+
+# RustDesk ID/signal server (hbbs) hostname
+RS_SERVER=id.example.com
+
+# RustDesk relay server (hbbr) hostname
+RS_RELAY=relay.example.com
+
+# Broker portal base URL (where support-client.exe registers)
+RS_PORTAL=https://support.example.com
+
+# Your RustDesk server's PUBLIC key (id_ed25519.pub, base64). Non-secret.
+RS_KEY=YOUR_RUSTDESK_SERVER_PUBLIC_KEY
+
+# Organization id used by the portal waiting room
+RS_ORG=demo
+
+# Optional: build output directory (default: %TEMP%\rds-oss-build)
+# BUILD_DIR=C:\build

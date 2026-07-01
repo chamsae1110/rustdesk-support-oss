@@ -1,0 +1,41 @@
+# Secrets / operator-specific build config — NEVER commit
+.env
+*.env
+!.env.example
+build.config
+!build.config.example
+*secret*
+*.key
+id_ed25519
+id_ed25519.pub
+
+# Build output / binaries
+*.exe
+build/
+dl/
+rustdesk.exe
+rustdesk-*.exe
+
+# Backups / scratch
+*.bak
+*.bak-*
+*-bak
+*.2win-bak
+*.tmp
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Operator-specific / infrastructure (keep private — do not publish)
+# home network topology, public IP, Cloudflare tunnel config, DNS records,
+# server install runbooks, connection-info live values
+CONNECTION-INFO.md
+STATUS.md
+cloudflared*.yml
+dns-records.md
+install-server.ps1

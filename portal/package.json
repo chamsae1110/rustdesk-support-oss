@@ -1,0 +1,9 @@
+{
+  "name": "remote-support-portal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ezHelp-style broker portal (MVP scaffold) for self-hosted RustDesk remote support",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node server.js" }
+}

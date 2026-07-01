@@ -1,0 +1,20 @@
+# 포털 — WSL에서 기동, 127.0.0.1:3010 에만 바인드 (외부 노출은 Cloudflare Tunnel 경유만).
+# prod pdf-autofill 스택과 포트/네트워크 분리.
+services:
+  portal:
+    build: .
+    container_name: remote-support-portal
+    env_file:
+      - .env
+    environment:
+      - PORT=3010
+      - BIND=0.0.0.0
+      - RUSTDESK_ID_SERVER=id.example.com
+      - CLIENT_DOWNLOAD_URL=https://support.example.com/dl/support-client.exe
+    volumes:
+      - ./dl:/app/dl:ro
+    ports:
+      - "127.0.0.1:3010:3010"
+    restart: unless-stopped
+
+# 도커 없이도 가능:  PORT=3010 node server.js

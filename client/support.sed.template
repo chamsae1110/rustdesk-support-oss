@@ -1,0 +1,37 @@
+[Version]
+Class=IEXPRESS
+SEDVersion=3
+[Options]
+PackagePurpose=InstallApp
+ShowInstallProgramWindow=0
+HideExtractAnimation=1
+UseLongFileName=1
+InsideCompressed=0
+CAB_FixedSize=0
+CAB_ResvCodeSigning=0
+RebootMode=N
+InstallPrompt=%InstallPrompt%
+DisplayLicense=%DisplayLicense%
+FinishMessage=%FinishMessage%
+TargetName=%TargetName%
+FriendlyName=%FriendlyName%
+AppLaunched=%AppLaunched%
+PostInstallCmd=%PostInstallCmd%
+AdminQuietInstallCmd=%AdminQuietInstallCmd%
+UserQuietInstallCmd=%UserQuietInstallCmd%
+SourceFiles=SourceFiles
+[Strings]
+InstallPrompt=
+DisplayLicense=
+FinishMessage=
+TargetName=C:\build\support-client.exe
+FriendlyName=Remote Support
+AppLaunched=powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File support-client.ps1
+PostInstallCmd=<None>
+AdminQuietInstallCmd=
+UserQuietInstallCmd=
+FILE0=support-client.ps1
+[SourceFiles]
+SourceFiles0=C:\build\
+[SourceFiles0]
+%FILE0%=
