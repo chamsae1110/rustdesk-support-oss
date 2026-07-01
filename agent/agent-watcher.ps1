@@ -44,13 +44,19 @@ while ($true) {
     Write-Host ("[{0}] 대기실 조회 실패, 5초 후 재시도" -f (Get-Date -Format HH:mm:ss)) -ForegroundColor DarkYellow
     Start-Sleep 5; continue
   }
+  # 상담원이 이미 원격세션 중이면(들어오는 CM 또는 나가는 연결) 자동연결 스킵 — 1:1 보장, 진짜 고객 2명 겹침 방지.
+  $busy = $false
+  try { if ([System.IO.Directory]::GetFiles('\\.\pipe\') -match 'query_cm') { $busy = $true } } catch {}
+  if (-not $busy) { try { if (Get-CimInstance Win32_Process -Filter "Name='rustdesk.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match '--connect' }) { $busy = $true } } catch {} }
   # 1:1 — 비번 있는 대기 고객 중 '가장 최근(경과 최소)' 1명만 자동연결. 유령·이중연결 방지. 60초 지나면 재시도 허용.
   $nowt = Get-Date
   $cands = @(@($list) | Where-Object {
     $_.password -and "$($_.rustdeskId)" -and
     ((-not $seen.ContainsKey("$($_.rustdeskId)")) -or (($nowt - $seen["$($_.rustdeskId)"]).TotalSeconds -gt 60))
   })
-  if ($cands.Count -gt 0) {
+  if ($busy -and $cands.Count -gt 0) {
+    Write-Host ("[{0}] 이미 원격세션 중 — 대기 {1}명 자동연결 보류(1:1)" -f (Get-Date -Format HH:mm:ss), $cands.Count) -ForegroundColor DarkYellow
+  } elseif ($cands.Count -gt 0) {
     $target = $cands | Sort-Object { [int]$_.ageSec } | Select-Object -First 1
     $tid = "$($target.rustdeskId)"
     $seen[$tid] = Get-Date

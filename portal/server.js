@@ -1,5 +1,6 @@
-// remote-support 브로커 포털 — MVP 스캐폴드 (외부 의존성 0, Node >= 18)
-// 이지헬프식 흐름: 엔드유저 자동등록(또는 ID 수동입력) → 6자리 코드 → 오퍼레이터 대기실에서 claim → 연결.
+// remote-support 브로커 포털 (외부 의존성 0, Node >= 18)
+// 흐름: 고객 클라 자동등록(비번 포함) → 상담원 대기실(마스터 로그인) → 워처 자동연결 / 대시보드 [연결].
+//   heartbeat로 살아있는 클라만 유지, 연결/종료 시 대기실서 제거.
 //
 // ⚠️ MVP — 운영 전 강화 필수:
 //   - in-memory → Postgres/Redis (이미 Postgres 보유)
@@ -17,26 +18,24 @@ const path = require('node:path');
 const PORT = process.env.PORT || 3010;
 const ID_SERVER = process.env.RUSTDESK_ID_SERVER || 'id.example.com';
 const DOWNLOAD_URL = process.env.CLIENT_DOWNLOAD_URL || 'https://support.example.com/dl/support-client.exe';
-const CODE_TTL_MS = 5 * 60 * 1000;
 const WAIT_TTL_MS = 30 * 60 * 1000;
 const LIVE_TTL_MS = 40 * 1000; // 하트비트 끊긴(죽은) 대기 항목은 40초 후 제거 — 유령 대기 방지
 
-// 조직 레지스트리 (→ DB). orgId -> 표시명
+// 조직 레지스트리. orgId -> 표시명
 const ORGS = { demo: 'Demo Remote Support' };
 
-const sessions = new Map(); // code -> {orgId, rustdeskId, createdAt, claimed}
-const waiting = new Map();  // rustdeskId -> {orgId, name, createdAt, code}
+const waiting = new Map();  // rustdeskId -> {orgId, name, agentId, password, createdAt, lastSeen}
 const rate = new Map();     // ip -> {count, ts}
 const now = () => Date.now();
 
 setInterval(() => {
   const t = now();
-  for (const [k, v] of sessions) if (t - v.createdAt > CODE_TTL_MS) sessions.delete(k);
   // 하트비트 끊긴(=죽은 클라) 또는 절대만료 항목 제거 — 유령 대기 방지
   for (const [k, v] of waiting) if (t - (v.lastSeen || v.createdAt) > LIVE_TTL_MS || t - v.createdAt > WAIT_TTL_MS) waiting.delete(k);
+  // rate 맵도 윈도우 지난 항목 제거 — 느린 메모리 누수 방지
+  for (const [k, r] of rate) if (t - r.ts > 60000) rate.delete(k);
 }, 10000).unref();
 
-const code6 = () => String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 const audit = (event, data) => console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...data }));
 function rateLimit(ip, limit = 10, win = 60000) {
   const t = now(); const r = rate.get(ip) || { count: 0, ts: t };
@@ -48,7 +47,14 @@ const send = (res, s, b, type = 'application/json') => {
   res.end(typeof b === 'string' ? b : JSON.stringify(b));
 };
 const readJson = (req) => new Promise((ok) => {
-  let d = ''; req.on('data', c => (d += c)); req.on('end', () => { try { ok(JSON.parse(d || '{}')); } catch { ok({}); } });
+  let d = ''; let over = false;
+  req.on('data', c => {
+    if (over) return;
+    d += c;
+    if (d.length > 65536) { over = true; d = ''; try { req.destroy(); } catch {} }  // 64KB 초과 = 차단(정상 요청은 수백 바이트)
+  });
+  req.on('end', () => { if (over) return ok({}); try { ok(JSON.parse(d || '{}')); } catch { ok({}); } });
+  req.on('error', () => ok({}));
 });
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -135,14 +141,12 @@ const server = http.createServer(async (req, res) => {
     if (!rateLimit(ip, 20)) return send(res, 429, { error: 'rate_limited' });
     const b = await readJson(req);
     if (!ORGS[b.orgId] || !/^[0-9]{6,12}$/.test(String(b.rustdeskId || ''))) return send(res, 400, { error: 'bad_request' });
-    const code = code6();
     const agentId = String(b.agentId || '1').slice(0, 8);
-    // Path 2(자동수락) 1회용 비번 — 있으면 저장(인증된 상담원에게만 제공). 비번은 로깅하지 않음.
+    // 자동수락 1회용 세션비번 — 있으면 저장(인증된 상담원에게만 제공). 비번은 로깅하지 않음.
     const password = b.password ? String(b.password).slice(0, 128) : '';
-    waiting.set(String(b.rustdeskId), { orgId: b.orgId, name: String(b.name || '').slice(0, 40), agentId, password, createdAt: now(), lastSeen: now(), code });
-    sessions.set(code, { orgId: b.orgId, rustdeskId: String(b.rustdeskId), createdAt: now(), claimed: false });
-    audit('register', { orgId: b.orgId, rustdeskId: b.rustdeskId, agentId, code, hasPw: !!password, ip });
-    return send(res, 200, { ok: true, code });
+    waiting.set(String(b.rustdeskId), { orgId: b.orgId, name: String(b.name || '').slice(0, 40), agentId, password, createdAt: now(), lastSeen: now() });
+    audit('register', { orgId: b.orgId, rustdeskId: b.rustdeskId, agentId, hasPw: !!password, ip });
+    return send(res, 200, { ok: true });
   }
   // 세션 종료/취소 시 대기실에서 즉시 제거 (고객 런처가 창 닫힘 또는 상담원 연결종료 감지 시 호출)
   if (req.method === 'POST' && p === '/api/unregister') {
@@ -154,7 +158,6 @@ const server = http.createServer(async (req, res) => {
       // 비번 있는 항목은 올바른 세션비번을 제시해야 제거(무단 제거 방지). 비번 없으면 id만으로 허용.
       if (w.password && String(b.password || '') !== w.password) return send(res, 403, { error: 'forbidden' });
       waiting.delete(id);
-      if (w.code) sessions.delete(w.code);
       audit('unregister', { orgId: w.orgId, rustdeskId: id, ip });
     }
     return send(res, 200, { ok: true });
@@ -170,19 +173,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && (m = p.match(/^\/api\/waiting\/([a-zA-Z0-9_-]+)$/))) {
     if (!isAgent(req)) return send(res, 401, { error: 'auth' });
     const list = [...waiting.entries()].filter(([, v]) => v.orgId === m[1])
-      .map(([id, v]) => ({ rustdeskId: id, name: v.name, agentId: v.agentId || '1', password: v.password || '', code: v.code, ageSec: Math.round((now() - v.createdAt) / 1000) }));
+      .map(([id, v]) => ({ rustdeskId: id, name: v.name, agentId: v.agentId || '1', password: v.password || '', ageSec: Math.round((now() - v.createdAt) / 1000) }));
     return send(res, 200, { list });
-  }
-  // 코드 claim (단일사용 소각, 인증 필요)
-  if (req.method === 'POST' && p === '/api/claim') {
-    if (!isAgent(req)) return send(res, 401, { error: 'auth' });
-    if (!rateLimit(ip, 10)) return send(res, 429, { error: 'rate_limited' });
-    const b = await readJson(req);
-    const s = sessions.get(String(b.code || ''));
-    if (!s || s.claimed || now() - s.createdAt > CODE_TTL_MS) return send(res, 404, { error: 'invalid_or_expired' });
-    s.claimed = true;
-    audit('claim', { code: b.code, rustdeskId: s.rustdeskId, ip });
-    return send(res, 200, { rustdeskId: s.rustdeskId, idServer: ID_SERVER });
   }
   // 오퍼레이터 대시보드 (인증 필요 — 아니면 로그인 페이지)
   if (req.method === 'GET' && p === '/operator') {
@@ -243,7 +235,6 @@ table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #eee;pad
 .btn{background:#1d9e75;color:#fff;border:0;padding:8px 14px;border-radius:8px;cursor:pointer}
 code{background:#f5f4ef;padding:2px 6px;border-radius:6px}</style>
 <h2>대기실 — ${esc(org)}</h2>
-<p>코드로 연결: <input id=c placeholder=6자리><button class=btn onclick=claim()>확인</button> <span id=cr></span></p>
 <table><thead><tr><th>이름</th><th>RustDesk ID</th><th>경과</th><th>연결</th></tr></thead><tbody id=t></tbody></table>
 <p><small>※ '연결' 클릭 = rustdesk://로 자동연결(이 기기에 RustDesk + 우리 서버 <code>${esc(ID_SERVER)}</code> 설정 필요 — 에이전트 셋업). 고객은 '수락'만. &nbsp;<a href="#" onclick="logout();return false">로그아웃</a></small></p>
 <script>
@@ -251,9 +242,6 @@ async function load(){const r=await fetch('/api/waiting/${esc(org)}');
  if(r.status===401){location.reload();return;}
  const j=await r.json();
  document.getElementById('t').innerHTML=j.list.map(function(x){var u='rustdesk://connect/'+x.rustdeskId+(x.password?('?password='+encodeURIComponent(x.password)):'');var mode=x.password?' 🔓자동':'';return '<tr><td>'+(x.name||'-')+'</td><td><code>'+x.rustdeskId+'</code></td><td>'+x.ageSec+'s'+mode+'</td><td><a class=btn href="'+u+'">연결</a></td></tr>';}).join('');}
-async function claim(){const code=document.getElementById('c').value.trim();
- const r=await fetch('/api/claim',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code:code})});
- const j=await r.json();document.getElementById('cr').textContent=r.ok?('→ 연결 대상 ID '+j.rustdeskId):'코드 무효/만료';}
 async function logout(){await fetch('/api/logout',{method:'POST'});location.reload();}
 load();setInterval(load,3000);
 </script>`;
